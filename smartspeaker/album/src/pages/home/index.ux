@@ -1,0 +1,456 @@
+<template>
+  <div class="bg-black">
+    <div class="w-full h-full flex-col bg-black relative" id="root" show="{{noData}}">
+      <div class="h-80 w-full bg-black flex-row px-30 items-center" id="header">
+        <image src="/common/images/back.png" class="w-42 h-42" @click="backClick"></image>
+        <text class="text-32 color-white ml-264 fw-600 lh-42 w-140">家庭相册</text>
+        <text
+          class="text-30 color-velaBlue lh-40 w-160 h-40 ml-150 text-right"
+          @click="saveAsScreensaver"
+          id="screen-btn"
+        ></text>
+      </div>
+      <div id="nodata-div" class="h-400 w-full flex-col items-center" show="{{false}}">
+        <image src="/common/images/icon-nodata.png" class="h-90 w-90 mt-97"></image>
+        <text class="fs-30 lh-40 h-40 mt-29 color-velaWhitea">暂无照片</text>
+      </div>
+      <image
+        class="absolute top-336 left-656 w-114 h-114"
+        id="image-add-box"
+        src="/common/images/add.png"
+        onclick="addClick"
+      ></image>
+    </div>
+    <!-- not open screensaver -->
+    <div class="w-full h-full flex-col bg-black" id="empty-page" show="{{!noData}}">
+      <div class="h-80 w-full bg-black flex-row justify-between px-30 items-center" id="header">
+        <image src="/common/images/back.png" class="w-42 h-42" @click="backClick"></image>
+        <text class="text-27 color-white fw-600">如何启用家庭相册</text>
+        <image src="/common/images/info.png" class="w-42 h-42" @click="helpClick"></image>
+      </div>
+      <div class="flex-row w-full justify-between mt-10 mb-20 px-32" id="img-box">
+        <image src="/common/images/step1.png" class="w-172 h-320"></image>
+        <image src="/common/images/step2.png" class="w-172 h-320"></image>
+        <image src="/common/images/step3.png" class="w-172 h-320"></image>
+        <image src="/common/images/step4.png" class="w-172 h-320"></image>
+      </div>
+      <text class="fs-20 lh-30 text-center color-velaWhite">
+        请通过「米家APP-首页-家庭管理-终端家庭屏保」启用家庭屏保功能并选择展示设备
+      </text>
+    </div>
+    <!-- toast -->
+    <div
+      class="w-346 h-140 absolute top-300 left-228 flex-col justify-center items-center bg-toastGray rounded-30"
+      id="toast"
+      style="display:none"
+    >
+      <text id="toast-text" class="w-286 h-80 fs-30 lh-40 fw-500 corlor-white">请在米家APP或小程序内新增或删除</text>
+    </div>
+  </div>
+</template>
+
+<script>
+/**
+ * @description home.ux
+ * @author syx
+ * @date 2024-12-17
+ * @LastEditTime 2024-12-17
+ * @LastEditors syx
+ * @param {*}
+ * @return {*}
+ * @example
+ * 
+ */
+import router from "@system.router"
+import miot from "@service.internal.miot"
+
+let tempScrollX = 0
+let timer = null
+let toastTimer = null
+export default {
+  private: {
+    scrollW: 0, // The width of the entire scrolling list (total width).
+    data: [], // show data
+    viewW: 800, // Visible area width.
+    itemW: 194, // thie width of each item
+    isUpdateData: false, // Whether the data is updated.
+    showNum: 0, // The quantity that needs to be displayed on the page.
+    hasRequest: false, // flag
+    offsetX: 20, // Dynamic offset - Set scrolling for the outer box.
+    lastTime: "",
+    noData: true,
+    start: 0,
+    end: 0
+  },
+  /**
+   * @description Modify the album status (no pictures, with pictures, album not enabled).
+   * @returns null
+   */
+  changeAlbumStatus() {
+    const blockStyle = {
+      display: "flex"
+    }
+    const noneStyle = {
+      display: "none"
+    }
+    this.$dom.suspendRenderFlush()
+    console.log("### 🚀Album ~ home.ux ~ changeAlbumStatus ###")
+    const emptyPage = this.$dom.getElementById("empty-page")
+    const root = this.$dom.getElementById("root")
+    if (!this.$app.$def.setDeviceAlbumStatus) {
+      this.$dom.setAttribute(emptyPage, "style", blockStyle)
+      this.$dom.setAttribute(root, "style", noneStyle)
+      console.log("### 🚀Album ~ home.ux ~ show image ###")
+      return
+    } else {
+      this.$dom.setAttribute(emptyPage, "style", noneStyle)
+      this.$dom.setAttribute(root, "style", blockStyle)
+    }
+    const saveScreenBtn = this.$dom.getElementById("screen-btn")
+    const noDataDiv = this.$dom.getElementById("nodata-div")
+
+    if (this.noData) {
+      console.log("### 🚀Album ~ home.ux ~ no data ###")
+      this.$dom.setAttribute(noDataDiv, "style", blockStyle)
+      this.$dom.setAttribute(saveScreenBtn, "style", noneStyle)
+    } else {
+      console.log("### 🚀Album ~ home.ux ~ has data ###")
+      this.$dom.setAttribute(noDataDiv, "style", noneStyle)
+      this.$dom.setAttribute(saveScreenBtn, "style", blockStyle)
+    }
+    this.$dom.triggerRenderFlush()
+  },
+  /**
+   * @description onReady
+   */
+  async onReady() {
+    let start = Date.now()
+    console.log("### 🚀Album ~ home page ~ onReady", start - this.$app.$def.time + "ms")
+    this.initPage()
+  },
+  /**
+   * @description init data
+   */
+  async initPage() {
+    try {
+      let start = Date.now()
+      // If the screensaver is not turned on, modify the status 
+      if (!this.$app.$def.setDeviceAlbumStatus) {
+        this.noData = true
+        this.changeAlbumStatus()
+        return
+      }
+      // It is possible to calculate how many lists can be stored in the visualization height. It is advisable to have a slightly larger number than the actual quantity of lists that the visualization height can accommodate to avoid replacement when scrolling. 
+      this.showNum = Math.floor(this.viewW / this.itemW) + 4
+      this.end = this.showNum * 2
+      if (this.$app.$def.thumbnailInfo.length === 0) {
+        this.noData = true
+        this.changeAlbumStatus()
+        return
+      } else {
+        this.noData = false
+        this.changeAlbumStatus()
+      }
+      this.showNum = Math.floor(this.viewW / this.itemW) + 4
+      this.end = this.showNum * 2
+       if (this.end > this.$app.$def.thumbnailInfo.length - 1 && this.$app.$def.isLastPage) {
+        this.showNum = Math.ceil(this.$app.$def.thumbnailInfo.length / 2)
+        this.end = this.$app.$def.thumbnailInfo.length
+      }
+      this.scrollW = Math.ceil(this.showNum * this.itemW)
+      this.data = this.$app.$def.thumbnailInfo.slice(0, this.end)
+      this.lastTime = new Date().getTime()
+      this.renderAlbumListNode(this.data)
+    } catch (e) {
+      console.log("### 🚀Album ~ home page ~ initPage error ###", e)
+    }
+  },
+  /**
+   * @description onShow
+   */
+  async onShow() {
+    console.log("### 🚀Album ~ home page ~ onShow isScreensaver", this.$app.$def.isScreensaver)
+    const saveScreenBtn = this.$dom.getElementById("screen-btn")
+    let text = this.$app.$def.isScreensaver ? "已设为屏保" : "设为屏保"
+    this.$dom.setAttribute(saveScreenBtn, "value", text)
+  },
+  /**
+   * add image function
+   * @param {*} listData 
+   */
+  renderAlbumListNode(listData) {
+    let start = Date.now()
+    const root = this.$dom.getElementById("root")
+    const imageAdd = this.$dom.getElementById("image-add-box")
+    this.$dom.suspendRenderFlush()
+    const imageScroll = this.$dom.createElement(root, "scroll", {
+      id: "image-scroll",
+      scrollX: "true",
+      onscroll: (e) => {
+        this.handleScroll(e)
+      },
+      style: {
+        width: `${this.viewW}px`
+      },
+      classList: ["flex-col", "h-388", "relative"]
+    })
+    this.$dom.insertBefore(root, imageScroll, imageAdd)
+
+    const widthContent = this.$dom.createElement(imageScroll, "div", {
+      id: "width-content",
+      classList: ["flex-col", "h-full"],
+      style: {
+        width: `${this.scrollW}px`,
+        transform: JSON.stringify({
+          translateX: `${this.offsetX}px`
+        })
+      }
+    })
+    this.$dom.appendChild(imageScroll, widthContent)
+    const widthBox = this.$dom.createElement(widthContent, "div", {
+      id: "width-box",
+      classList: ["flex-wrap", "flex-col", "overflow-hidden"]
+    })
+    this.$dom.appendChild(widthContent, widthBox)
+    for (let i = 0; i < listData.length; i++) {
+      let elem = this.$dom.createElement(widthBox, "div", {})
+      this.$dom.appendChild(widthBox, elem)
+      let item = listData[i]
+      let img = this.createdImage(elem, item, i)
+      this.$dom.appendChild(elem, img)
+    }
+    const saveScreenBtn = this.$dom.getElementById("screen-btn")
+    let text = this.$app.$def.isScreensaver ? "已设为屏保" : "设为屏保"
+    this.$dom.setAttribute(saveScreenBtn, "value", text)
+    this.$dom.triggerRenderFlush()
+  },
+  /**
+   * handleScroll function
+   * @param {*} e 
+   */
+  async handleScroll(e) {
+    // 控制滚动时间间隔
+    if (new Date().getTime() - this.lastTime > 10) {
+      let scrollLeft = e.scrollX
+      let offsetX = scrollLeft - (scrollLeft % this.itemW)
+      let start
+      let end
+      let flag = false
+      // Slide to the left
+      if (tempScrollX < scrollLeft) {
+        if (scrollLeft < this.itemW * 3) return
+        let num = Math.floor((scrollLeft - 20) / this.itemW)
+        offsetX = (num - 2) * this.itemW
+        this.offsetX = offsetX
+        start = (num - 2) * 2
+        end = (num - 2 + this.showNum) * 2
+        if (
+          this.$app.$def.isLastPage &&
+          start > this.$app.$def.thumbnailInfo.length - this.showNum * 2 + 1
+        )
+          return
+        if (this.start !== start) {
+          if (end + 2 >= this.$app.$def.thumbnailInfo.length && !this.$app.$def.isLastPage) {
+            // request data
+          } else if (end >= this.$app.$def.thumbnailInfo.length && this.$app.$def.isLastPage) {
+            end = this.$app.$def.thumbnailInfo.length
+          }
+          if (this.end !== end && end <= this.$app.$def.thumbnailInfo.length) {
+            this.data = this.$app.$def.thumbnailInfo.slice(start, end)
+            flag = true
+          }
+        }
+        // Slide to the right
+      } else if (tempScrollX > scrollLeft) {
+        if (offsetX < this.itemW * 2) return
+        let num = Math.floor((scrollLeft - 20) / this.itemW)
+        offsetX = (num - 2) * this.itemW
+        this.offsetX = offsetX
+        start = (num - 2) * 2
+        end = (num - 2 + this.showNum) * 2
+        if (this.start != start && start >= 0) {
+          this.data = this.$app.$def.thumbnailInfo.slice(start, end)
+          flag = true
+        }
+      }
+      if (flag) {
+        this.$dom.suspendRenderFlush()
+        this.updateranslateX()
+        this.updateImageSrc(start)
+        this.$dom.triggerRenderFlush()
+        this.lastTime = new Date().getTime()
+        this.start = start
+        this.end = end
+        flag = false
+      }
+      tempScrollX = e.scrollX
+    }
+  },
+  /**
+   * updateImageSrc function
+   * @param {*} start 
+   */
+  updateImageSrc(start) {
+    try{
+    let index = start
+    for (let i = 0; i < this.showNum * 2; i++) {
+      const image = this.$dom.getElementById(`image_${i}`)
+      let  imgSrc = this.data[i] && this.data[i].imgUrl || "/common/images/bg-default.png"
+      this.$dom.setAttribute(image, "src", imgSrc)
+      if (!this.data[i]) {
+        this.$dom.setAttribute(image, "alt", "/common/images/bg-default.png")
+        this.$dom.addEventListener(image, "click", (e) => {
+          return
+        })
+      } else {
+        this.$dom.setAttribute(image, "alt", "/common/images/default.png")
+        this.$dom.addEventListener(image, "click", (e) => {
+          this.imageDetailClick(index, this.data[i], e)
+        })
+      }
+      this.$dom.addEventListener(image, "longpress", (e) => {
+        this.longpressClick(index, this.data[i], e)
+      })
+      index += 1
+    }
+    }
+    catch(e){
+      console.error("====updateImageSrc error========================",e)
+    }
+  },
+  /**
+   * updateranslateX function
+   */
+  updateranslateX() {
+    const widthBox = this.$dom.getElementById("width-content")
+    this.$dom.setAttribute(widthBox, "style", {
+      transform: JSON.stringify({
+        translateX: `${this.offsetX + 20}px`
+      })
+    })
+  },
+  /**
+   * createdImage function
+   * @param {*} root root node
+   * @param {*} item item node
+   * @param {*} idx 
+   */
+  createdImage(root, item, idx) {
+    let image = this.$dom.createElement(root, "image", {
+      id: `image_${idx}`,
+      classList: ["image-fit"],
+      src: item.imgUrl || '',
+      alt: "/common/images/default.png",
+      onclick: (e) => {
+        // Click to enter the picture details.
+        this.imageDetailClick(idx, item, e)
+      },
+      onlongpress: (e) => {
+        // Long press to pop up a toast prompt.
+        this.longpressClick(idx, item, e)
+      }
+    })
+    return image
+  },
+  /**
+   * return
+   */
+  backClick() {
+    router.back()
+  },
+  /**
+   * imageDetailClick function: Click to enter the picture details
+   * @param {*} index 
+   * @param {*} item 
+   * @param {*} e 
+   */
+  imageDetailClick(index, item, e) {
+    router.push({
+      uri: "pages/preview",
+      params: {
+        index: item?.id
+      }
+    })
+  },
+  /**
+   *  Click to enter the screeensaver details
+   */
+  saveAsScreensaver() {
+    router.push({
+      uri: "pages/screenSaver"
+    })
+  },
+  /**
+   * Long press to pop up a toast prompt
+   * @param {*} index 
+   * @param {*} item 
+   */
+  longpressClick(index, item) {
+    this.changeToastStatus(true)
+    if(toastTimer) clearTimeout(toastTimer)
+    toastTimer = setTimeout(() => {
+      this.changeToastStatus(false)
+    }, 2000)
+  },
+  /**
+   * Control the hiding and showing of the toast.
+   * @param {*} isShow 
+   */
+  changeToastStatus(isShow) {
+    const toast = this.$dom.getElementById("toast")
+    let obj = {display: isShow ? "flex" : "none"}
+    this.$dom.setAttribute(toast, "style", obj)
+  },
+  /**
+   * add images
+   */
+  addClick() {
+    miot.recordEvents({
+      events: [
+        {
+          key: "photo_click",
+          value: "add"
+        }
+      ]
+    })
+    router.push({
+      uri: "pages/upload"
+    })
+  },
+  /**
+   * help
+   */
+  helpClick() {
+    miot.recordEvents({
+      events: [
+        {
+          key: "photo_click",
+          value: "QA"
+        }
+      ]
+    })
+    router.push({
+      uri: "pages/manual"
+    })
+  },
+  /**
+   * onDestroy
+   */
+  onDestroy() {
+    if (timer) {
+      clearTimeout(timer)
+    }
+    if(toastTimer) clearTimeout(toastTimer)
+  }
+}
+</script>
+
+<style>
+.image-fit {
+  width: 186px;
+  height: 186px;
+  object-fit: cover;
+  margin: 0px 8px 8px 0px;
+}
+
+</style>

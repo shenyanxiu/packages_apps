@@ -1,0 +1,25 @@
+<script>
+import {dataList} from "@common/js/constants"
+
+export default {
+  bigThumbnailInfo: dataList,
+  thumbnailInfo: dataList,
+  isLastPage: true,
+  setDeviceAlbumStatus:true,
+  time:0,
+  isScreensaver: false,
+  async onCreate() {
+    console.log("### 🚀Album ~ app.ux ~ onCreate ###")
+  },
+  onDestroy() {
+    console.log("app destroyed")
+  },
+  onDestroy() {
+    if (timer) clearInterval(timer)
+  }
+}
+</script>
+
+<style>
+@import "./common/style/unocss-vela.css";
+</style>
