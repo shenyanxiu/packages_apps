@@ -1,0 +1,39 @@
+<template>
+  <div class="demo-page">
+    <text class="title" if="{{!imageUri}}">等待接收图片...</text>
+    <image if="{{imageUri}}" src="{{imageUri}}" class="full-image"></image>
+  </div>
+</template>
+
+<script>
+export default {
+  private: {
+    imageUri: ''
+  },
+  onInit() {
+    if (this.imageUri) {
+      console.log('--- 详情页收到图片 ---')
+    }
+  }
+}
+</script>
+
+<style>
+.demo-page {
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+}
+
+.title {
+  font-size: 24px;
+  text-align: center;
+  color: #999999;
+}
+
+.full-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+</style>

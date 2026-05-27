@@ -1,0 +1,267 @@
+<template>
+  <div class="column page">
+    <text class="header">图片传输 Demo</text>
+    <div class="column group">
+      <input type="button" class="btn" @click="handleCreateConn" value="创建连接" />
+      <input type="button" class="btn btn-send" @click="handleSendMessage" value="发送消息" />
+      <div>
+        <text class="status-text">状态: {{statusText}}</text>
+      </div>
+      <div if="{{transferProgress > 0}}">
+        <text class="font-14">传输进度: {{transferProgress}}%</text>
+      </div>
+      <div if="{{imageData}}" class="image-container">
+        <image src="{{imageData}}" class="preview-image"></image>
+      </div>
+      <div if="{{receiveData}}">
+        <text class="font-14">消息: {{receiveData}}</text>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script>
+  import interconnect from '@system.interconnect'
+  import file from '@system.file'
+
+  let conn = null
+
+  export default {
+    private: {
+      sendData: '',
+      receiveData: '',
+      statusText: '未连接',
+      imageData: '',
+      transferProgress: 0,
+      imageChunks: [],
+      expectedChunks: 0,
+      receivedChunks: 0,
+      imageName: '',
+      imageType: '',
+      imageIndex:0,
+
+    },
+
+    handleCreateConn() {
+      console.log('--- 创建连接 ---')
+      conn = interconnect.instance()
+
+      conn.getReadyState({
+        success: (data) => {
+          if (data.status === 1) {
+            this.statusText = '已连接'
+            console.log('--- 连接成功 ---')
+          } else if (data.status === 2) {
+            this.statusText = '连接失败'
+            console.log('--- 连接失败 ---')
+          }
+        },
+        fail: (data, code) => {
+          this.statusText = '连接异常'
+          console.log(`getReadyState fail, code = ${code}`)
+        }
+      })
+
+      conn.onmessage = (data) => {
+        console.log('--- 收到消息 ---', JSON.stringify(data))
+        this.handleReceivedData(data?.data || '22')
+      }
+
+      conn.onopen = () => {
+        this.statusText = '已连接'
+        console.log('--- connection opened ---')
+      }
+
+      conn.onclose = (data) => {
+        this.statusText = '已断开'
+        console.log(`--- connection closed, code = ${data.code} ---`)
+      }
+
+      conn.onerror = (data) => {
+        this.statusText = '连接错误'
+        console.log(`--- connection error, errCode = ${data.code} ---`)
+      }
+    },
+
+    handleReceivedData(rawData) {
+      console.log('--- 处理收到的数据 ---', rawData)
+      let msg = ""
+      if (typeof rawData === 'string') {
+        try {
+          msg = JSON.parse(rawData)
+        } catch (e) {
+          this.receiveData = rawData
+          return
+        }
+      } else {
+        msg = rawData
+      }
+
+      switch (msg.type) {
+        case 'header':
+          this.handleImageStart(msg)
+          break
+        case 'data':
+          this.handleImageChunk(msg)
+          break
+        case 'end':
+          this.handleImageEnd(msg)
+          break
+        default:
+          this.receiveData = JSON.stringify(msg)
+          break
+      }
+    },
+
+    handleImageStart(msg) {
+      console.log(`--- 开始接收图片, 共 ${msg.totalChunks} 片 ---`)
+      this.deleteFile()
+      this.imageChunks = []
+      this.expectedChunks = msg.totalChunks
+      this.receivedChunks = 0
+      this.imageName = `image${this.imageIndex}.png`
+      this.imageType = 'image/png'
+      this.transferProgress = 0
+      this.statusText = '接收图片中...'
+      this.imageData = ''
+      
+    },
+
+    handleImageChunk(msg) {
+      this.imageChunks[msg.index] = msg.chunk
+      this.receivedChunks++
+      this.transferProgress = Math.floor((this.receivedChunks / this.expectedChunks) * 100)
+      console.log(`--- 收到分片 ${msg.index + 1}/${this.expectedChunks} ---`)
+    },
+
+    handleImageEnd(msg) {
+      console.log('--- 图片传输完成，开始组装 ---')
+      this.statusText = '保存图片中...'
+      const base64Str = this.imageChunks.join('')
+      this.saveImageToFile(base64Str)
+      this.imageChunks = []
+    },
+    deleteFile() {
+      file.list({
+        uri: 'internal://cache',
+        success: (data) => {
+          const fileList = data.fileList || []
+          fileList.forEach((item) => {
+            console.log(`--- 删除文件: ${item.uri} ---`)
+            const uri = `internal://cache/${item.uri}`
+            file.delete({
+              uri: uri,
+              success: () => {
+                console.log(`--- 已删除文件: ${uri} ---`)
+              },
+              fail: () => {
+                console.log(`--- 删除文件失败: ${uri} ---`)
+              }
+            })
+          })
+        },
+        fail: () => {
+          console.log('--- 列出cache目录失败 ---')
+        }
+      })
+    },
+
+    saveImageToFile(base64Data) {
+      const filePath = `internal://cache/${this.imageName}`
+      this.writeImage(filePath, base64Data)
+    },
+
+    writeImage(filePath, base64Data) {
+      file.writeArrayBuffer({
+        uri: filePath,
+        buffer: this.base64ToArrayBuffer(base64Data),
+        success: () => {
+          console.log(`--- 图片已保存: ${filePath} ---`)
+          this.imageData = filePath
+          this.imageIndex++
+          this.statusText = '图片接收完成'
+          this.transferProgress = 100
+        },
+        fail: (data, code) => {
+          console.log(`--- 图片保存失败, code = ${code} ---`)
+          this.statusText = '图片保存失败'
+        }
+      })
+    },
+
+    base64ToArrayBuffer(base64) {
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+      const len = base64.length
+      let bufLen = (len * 3) / 4
+      if (base64[len - 1] === '=') bufLen--
+      if (base64[len - 2] === '=') bufLen--
+
+      const buffer = new ArrayBuffer(bufLen)
+      const view = new Uint8Array(buffer)
+
+      let p = 0
+      for (let i = 0; i < len; i += 4) {
+        const a = chars.indexOf(base64[i])
+        const b = chars.indexOf(base64[i + 1])
+        const c = chars.indexOf(base64[i + 2])
+        const d = chars.indexOf(base64[i + 3])
+
+        view[p++] = (a << 2) | (b >> 4)
+        if (c !== -1) view[p++] = ((b & 15) << 4) | (c >> 2)
+        if (d !== -1) view[p++] = ((c & 3) << 6) | d
+      }
+      return buffer
+    },
+
+    handleSendMessage() {
+      if (!conn) {
+        this.statusText = '请先创建连接'
+        return
+      }
+      let data = {
+        type: 'request_image',
+        message: '请发送图片',
+        t: Date.now()
+      }
+      this.sendData = JSON.stringify(data)
+      conn.send({
+        data: data,
+        success: () => {
+          this.statusText = '已请求图片'
+          console.log('--- 发送请求成功 ---')
+        },
+        fail: (data) => {
+          this.statusText = '发送失败'
+          console.log(`--- send fail, errCode = ${data.code} ---`)
+        }
+      })
+    }
+  }
+</script>
+
+<style>
+  @import '../../style/comm.css';
+
+  .status-text {
+    font-size: 24px;
+    color: #666666;
+    margin-bottom: 10px;
+  }
+
+  .image-container {
+    margin-top: 20px;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .preview-image {
+    width: 300px;
+    height: 300px;
+    border-radius: 10px;
+    object-fit: contain;
+  }
+
+  .btn-send {
+    background-color: #4CAF50;
+  }
+</style>
